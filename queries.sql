@@ -78,5 +78,91 @@ order by case trim(to_char(s.sale_date, 'day'))
         WHEN 'friday' THEN 5
         WHEN 'saturday' THEN 6
         WHEN 'sunday' THEN 7
-    END, -- Порядок дней недели от понедельника до воскресенья
+    END,    -- Порядок дней недели от понедельника до воскресенья
     seller; -- Затем по имени продавца в алфавитном порядке
+
+-- Таблица "age_groups"
+-- Первый блок: подсчет количества клиентов в возрастной группе 16-25
+select
+	'16-25' as age_category, -- Название возрастной категории
+	count(*) as age_count    -- Количество клиентов в этой группе
+from customers
+where age between 16 and 25  -- Выбираем клиентов с возрастом от 16 до 25 включительно
+union all  -- Объединяет результаты с следующими запросами, создавая одну таблицу
+
+-- Второй блок: подсчет количества клиентов в возрастной группе 26-40
+select
+	'26-40' as age_category, -- Название возрастной категории
+	count(*) as age_count    -- Количество клиентов в этой группе
+from customers
+where age between 26 and 40  -- Выбираем клиентов с возрастом от 26 до 40 включительно
+union all   -- Объединяет результаты с очередным запросом
+
+-- Третий блок: подсчет количества клиентов старше 40
+select
+	'40+' as age_category,  -- Название возрастной категории
+	count(*) as age_count   -- Количество клиентов в этой группе
+from customers
+where age > 40; -- Выбираем клиентов старше 40 лет
+
+-- Таблица "customers_by_month"
+select
+	to_char(s.sale_date, 'YYYY-MM') as selling_month, -- дата в формате ГОД-МЕСЯЦ
+	count(distinct s.customer_id) as total_customers, -- уникальные покупатели за месяц
+	ROUND(SUM(s.quantity * p.price), 0) as income     -- выручка за месяц
+from sales s
+join products p on p.product_id = s.product_id -- присоединяем таблицу товаров для получения цены
+group by to_char(sale_date, 'YYYY-MM')         -- группировка по месяцу
+order by selling_month; -- сортировка по дате в порядке возрастания
+
+-- Таблица "special_offer"
+-- Находим все покупки со стоимостью 0 (бесплатные), для каждого клиента
+with first_purchase as (
+	select
+		concat(c.first_name, ' ', c.last_name) as customer, -- Имя клиента (фамилия + имя)
+		c.customer_id,                                      -- ID клиента
+		s.sale_date,                                        -- Дата продажи
+		p.price,                                            -- Цена товара (должна быть 0)
+		s.sales_person_id,                                  -- ID продавца (сотрудника), реализовавшего продажу
+        -- Номер строки для каждого клиента, сортировка по дате продажи (чтобы определить первую)
+    	ROW_NUMBER() OVER (PARTITION BY c.customer_id ORDER BY s.sale_date) AS rn
+	from customers c
+	join sales s on c.customer_id = s.customer_id
+	join products p on s.product_id = p.product_id
+	where p.price = 0   -- Только бесплатные продажи
+),
+first_action_purchase as (
+    -- Выбираем первую покупку (самую раннюю) для каждого клиента
+	select
+		customer,
+		customer_id,
+		sale_date,
+		sales_person_id
+	from first_purchase
+    -- Только первая покупка по дате
+	where rn = 1
+),
+-- Проверяем, что это действительно первая покупка: у клиента не было более ранних продаж
+first_purchase_valid as (
+    select
+    	fp.customer,
+    	fp.customer_id,
+    	fp.sale_date,
+    	fp.sales_person_id
+    from first_action_purchase fp
+    where not exists (
+        -- Ищем более ранние продажи для этого клиента
+        select 1
+        from sales s2
+        where s2.customer_id  = fp.customer_id
+          and s2.sale_date < fp.sale_date
+    )
+)
+-- Основной запрос: для каждой первой покупки ищем имя продавца
+select
+    fp.customer,                                        -- Имя клиента
+    fp.sale_date,                                       -- Дата первой покупки
+    concat(e.first_name, ' ', e.last_name) as seller    -- Имя продавца
+from first_purchase_valid fp
+join employees e on fp.sales_person_id = e.employee_id  -- Соединение по ID продавца
+order by fp.customer_id;                                   -- Сортировка по имени клиента
